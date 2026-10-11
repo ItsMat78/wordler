@@ -1,0 +1,47 @@
+---
+// The blog's editorial opener: a tiny blue kicker, a scattered display
+// headline, and an optional deck passed as children.
+interface Fragment {
+  text: string;
+  size?: 'm' | 'l' | 'xl';
+  weight?: number;
+  italic?: boolean;
+  shift?: string;
+  lift?: string;
+  rot?: number;
+}
+
+interface Props {
+  eyebrow: string;
+  lines: readonly Fragment[];
+}
+
+const { eyebrow, lines } = Astro.props;
+
+const style = (l: Fragment) =>
+  [
+    l.shift && `--shift:${l.shift}`,
+    l.lift && `margin-top:${l.lift}`,
+    l.weight && `font-weight:${l.weight}`,
+    l.rot && `--rot:${l.rot}deg`,
+  ]
+    .filter(Boolean)
+    .join(';');
+---
+
+<header class="masthead">
+  <p class="eyebrow">{eyebrow}</p>
+  <h1 class="scatter">
+    {
+      lines.map((l) => (
+        <span
+          class:list={['scatter__line', `scatter__line--${l.size ?? 'l'}`, l.italic && 'scatter__line--italic']}
+          style={style(l)}
+        >
+          {l.text}
+        </span>
+      ))
+    }
+  </h1>
+  <slot />
+</header>

@@ -1,0 +1,32 @@
+---
+// A Wordle grid from stored colors ("bybbb,gbbyb"). Letters are shown only
+// when passed, which the pages do once a puzzle has closed.
+interface Props {
+  colors: string;
+  guesses?: string;
+  size?: 'sm' | 'md' | 'lg';
+  label?: string;
+}
+
+const { colors, guesses, size = 'sm', label } = Astro.props;
+const rows = colors.split(',');
+const words = guesses?.split(',');
+const names = { g: 'right spot', y: 'in the word', b: 'not in the word' } as Record<string, string>;
+const describe =
+  label ??
+  rows
+    .map((r, i) => `Row ${i + 1}: ${words ? words[i].toUpperCase() + ', ' : ''}${[...r].map((c) => names[c]).join(', ')}`)
+    .join('. ');
+---
+
+<div class:list={['grid', size !== 'sm' && `grid--${size}`]} role="img" aria-label={describe}>
+  {
+    rows.map((row, r) => (
+      <div class="grid__row">
+        {[...row].map((c, i) => (
+          <span class={`tile tile--${c}`}>{words ? words[r][i] : ''}</span>
+        ))}
+      </div>
+    ))
+  }
+</div>

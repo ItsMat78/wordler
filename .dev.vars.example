@@ -1,0 +1,14 @@
+# Copy to .dev.vars for local dev. In production set each one with
+# `npx wrangler pages secret put <NAME>`.
+
+# Discord Developer Portal → your application → OAuth2.
+DISCORD_CLIENT_ID=
+DISCORD_CLIENT_SECRET=
+
+# Any long random string; signs the login cookie.
+# node -e "console.log(crypto.randomUUID()+crypto.randomUUID())"
+SESSION_SECRET=
+
+# Optional: comma-separated Discord user ids allowed to log in.
+# Leave empty to let anyone with a Discord account in.
+ALLOWED_DISCORD_IDS=

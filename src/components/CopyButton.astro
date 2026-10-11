@@ -1,0 +1,28 @@
+---
+// "Copy for Discord": copies the ready-made message; the label says so briefly.
+interface Props {
+  text: string;
+  small?: boolean;
+}
+
+const { text, small = true } = Astro.props;
+---
+
+<button class:list={['button button--ghost', small && 'button--small']} type="button" data-copy={text}>
+  Copy for Discord
+</button>
+
+<script>
+  document.querySelectorAll<HTMLButtonElement>('[data-copy]').forEach((btn) => {
+    const label = btn.textContent;
+    btn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(btn.dataset.copy ?? '');
+        btn.textContent = 'Copied';
+      } catch {
+        btn.textContent = 'Copy failed';
+      }
+      setTimeout(() => (btn.textContent = label), 1800);
+    });
+  });
+</script>

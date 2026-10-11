@@ -1,0 +1,70 @@
+---
+// A week's, month's or all-time ranking (see src/lib/rank.ts for the measure),
+// then anyone short of the minimum games, unranked.
+import { avatarUrl } from '../lib/db';
+import type { Standing } from '../lib/rank';
+
+interface Props {
+  ranked: Standing[];
+  pending: Standing[];
+  min: number;
+  me?: string;
+  empty: string;
+}
+
+const { ranked, pending, min, me, empty } = Astro.props;
+const row = (r: Standing) => ({
+  ...r,
+  // Non-breaking spaces keep each stat whole when the line wraps on phones.
+  meta: [`${r.played} played`, `${Math.round((r.wins / r.played) * 100)}% won`, `avg ${r.average.toFixed(2)}`].join(' · '),
+});
+---
+
+{!ranked.length && !pending.length && <p class="empty">{empty}</p>}
+
+{
+  ranked.length > 0 && (
+    <ol class="st">
+      {ranked.map(row).map((r) => (
+        <li class:list={['st__row', r.discord_id === me && 'lb__row--me']}>
+          <span class:list={['lb__rank', r.place === 1 && 'lb__rank--first']}>{r.place}</span>
+          <a class="st__who" href={`/u/${r.discord_id}`}>
+            <img class="avatar" src={avatarUrl(r)} alt="" width="30" height="30" loading="lazy" />
+            <span class="st__text">
+              <span class="lb__name">{r.name}</span>
+              <span class="st__meta">{r.meta}</span>
+            </span>
+          </a>
+          <span class="st__rating" title="Rating: adjusted average guesses, lower is better">
+            {r.rating.toFixed(2)}
+          </span>
+        </li>
+      ))}
+    </ol>
+  )
+}
+
+{
+  pending.length > 0 && (
+    <>
+      <p class="annotation st__pending-head">
+        Not ranked yet · fewer than {min} games
+      </p>
+      <ul class="st st--pending">
+        {pending.map(row).map((r) => (
+          <li class:list={['st__row', r.discord_id === me && 'lb__row--me']}>
+            <span class="lb__rank">–</span>
+            <a class="st__who" href={`/u/${r.discord_id}`}>
+              <img class="avatar" src={avatarUrl(r)} alt="" width="30" height="30" loading="lazy" />
+              <span class="st__text">
+                <span class="lb__name">{r.name}</span>
+                <span class="st__meta">{r.meta}</span>
+              </span>
+            </a>
+            <span class="st__need annotation">{min - r.played} to go</span>
+          </li>
+        ))}
+      </ul>
+    </>
+  )
+}

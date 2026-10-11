@@ -1,0 +1,16 @@
+---
+import Base from '../layouts/Base.astro';
+import Masthead from '../components/Masthead.astro';
+
+Astro.response.status = 404;
+const hero = [
+  { text: 'Not in', size: 'xl', weight: 680, rot: -1.5 },
+  { text: 'word list.', size: 'l', weight: 400, italic: true, shift: '4rem', rot: 1, lift: '-0.6rem' },
+] as const;
+---
+
+<Base title="Not found">
+  <Masthead eyebrow="404" lines={hero}>
+    <p class="masthead__deck">That page doesn't exist. <a href="/">Back to the board</a>.</p>
+  </Masthead>
+</Base>

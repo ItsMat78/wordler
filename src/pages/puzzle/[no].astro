@@ -1,0 +1,86 @@
+---
+import Base from '../../layouts/Base.astro';
+import Masthead from '../../components/Masthead.astro';
+import Leaderboard from '../../components/Leaderboard.astro';
+import CopyButton from '../../components/CopyButton.astro';
+import Grid from '../../components/Grid.astro';
+import { submissionsFor } from '../../lib/db';
+import { shareText } from '../../lib/share';
+import { closesAt, isClosed, opensAt, puzzleDate, shortDate, timeUntil } from '../../lib/wordle';
+
+const n = Number(Astro.params.no);
+const now = Date.now();
+if (!Number.isInteger(n) || n < 0 || now < opensAt(n)) return Astro.rewrite('/404');
+
+const db = Astro.locals.runtime.env.DB;
+const closed = isClosed(n, now);
+const players = await submissionsFor(db, [n]);
+// The answer only leaves the database once the puzzle has closed everywhere.
+const answer = closed
+  ? await db.prepare('SELECT answer FROM puzzles WHERE number = ?').bind(n).first<string>('answer')
+  : null;
+const saved = Astro.url.searchParams.has('saved');
+const share = shareText({ number: n, players, answer, origin: Astro.url.origin });
+const label = n.toLocaleString('en-US');
+const date = new Date(`${puzzleDate(n)}T00:00:00Z`).toLocaleDateString('en-US', {
+  weekday: 'long',
+  month: 'long',
+  day: 'numeric',
+  year: 'numeric',
+  timeZone: 'UTC',
+});
+
+const hero = [
+  { text: 'Wordle', size: 'l', weight: 400, italic: true, rot: -1 },
+  { text: label, size: 'xl', weight: 680, shift: '2.5rem', rot: 1, lift: '-0.6rem' },
+] as const;
+---
+
+<Base title={`Wordle ${label}`}>
+  <div class="stack">
+    <Masthead eyebrow={date} lines={hero}>
+      <p class="masthead__deck">
+        {
+          closed ? (
+            `Closed ${shortDate(n + 1)}, 12:00 UTC. ${players.length} ${players.length === 1 ? 'person' : 'people'} played.`
+          ) : (
+            <>
+              Open for another <strong>{timeUntil(closesAt(n), now)}</strong>. Tap a player to see their guesses.
+            </>
+          )
+        }
+      </p>
+    </Masthead>
+
+    {saved && <p class="notice">Saved. Your grid is on the board.</p>}
+
+    {
+      answer && (
+        <section>
+          <div class="section-head">
+            <h2 class="display display--section">The answer</h2>
+          </div>
+          <Grid colors="ggggg" guesses={answer} size="lg" label={`The answer was ${answer.toUpperCase()}`} />
+        </section>
+      )
+    }
+
+    <section>
+      <div class="section-head">
+        <h2 class="display display--section">Leaderboard</h2>
+        {players.length > 0 && <CopyButton text={share} />}
+      </div>
+      {
+        players.length ? (
+          <Leaderboard players={players} me={Astro.locals.user?.discord_id} askFirst={!closed} />
+        ) : (
+          <p class="empty">
+            Nobody played this one.{' '}
+            {!closed && <a href="/">Submit yours →</a>}
+          </p>
+        )
+      }
+    </section>
+  </div>
+</Base>
+

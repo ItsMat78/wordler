@@ -1,0 +1,30 @@
+---
+import { avatarUrl } from '../lib/db';
+
+const user = Astro.locals.user;
+const path = Astro.url.pathname;
+---
+
+<header class="site-header">
+  <div class="container site-header__inner">
+    <a class="wordmark" href="/" aria-label="Wordler, home">
+      {[...'wordler'].map((l) => <span aria-hidden="true">{l}</span>)}
+    </a>
+
+    <div class="site-header__right">
+      {
+        user ? (
+          <a class="me" href={`/u/${user.discord_id}`} aria-current={path === `/u/${user.discord_id}` ? 'page' : undefined}>
+            <img class="avatar" src={avatarUrl(user, 64)} alt="" width="30" height="30" />
+            <span class="me__label">Profile</span>
+          </a>
+        ) : (
+          <a class="me" href={`/auth/login?next=${encodeURIComponent(path)}`}>
+            Log in
+          </a>
+        )
+      }
+      <button id="theme-toggle" class="icon-button" type="button" aria-label="Switch theme">☾</button>
+    </div>
+  </div>
+</header>

@@ -1,0 +1,625 @@
+---
+import Base from '../layouts/Base.astro';
+import Grid from '../components/Grid.astro';
+import Leaderboard from '../components/Leaderboard.astro';
+import CopyButton from '../components/CopyButton.astro';
+import Standings from '../components/Standings.astro';
+import { addSubmission, getPuzzle, playedAmong, submissionsFor, tallies, upsertUser } from '../lib/db';
+import { PRIOR, rank } from '../lib/rank';
+import { shareMine } from '../lib/share';
+import {
+  checkGuesses,
+  reconcile,
+  closesAt,
+  isOpen,
+  localToday,
+  puzzleDate,
+  puzzleNumber,
+  shortDate,
+  scoreLabel,
+  timeUntil,
+} from '../lib/wordle';
+
+const user = Astro.locals.user;
+const db = Astro.locals.runtime.env.DB;
+const now = Date.now();
+const today = localToday(Astro.cookies.get('tz')?.value, now);
+const label = (n: number) => n.toLocaleString('en-US');
+
+// Today's puzzle, plus yesterday's while it's still open for anyone who missed it.
+const open = [today, today - 1].filter((n) => isOpen(n, now));
+const played = user ? await playedAmong(db, user.discord_id, open) : new Set<number>();
+const choices = open.filter((n) => !played.has(n));
+
+// The page is about one puzzle: today's, or yesterday's (?p=) while it's open.
+// Tabs at the top switch between them.
+const requested = Number(Astro.url.searchParams.get('p'));
+const viewing = open.includes(requested) ? requested : today;
+const href = (n: number) => (n === today ? '/' : `/?p=${n}`);
+let error = '';
+let typed = '';
+let seen = '';
+let moved: number | null = null;
+let picked = viewing;
+
+if (Astro.request.method === 'POST' && user) {
+  const form = await Astro.request.formData();
+  typed = String(form.get('guesses') ?? '');
+  seen = String(form.get('seen') ?? '');
+  picked = Number(form.get('puzzle'));
+
+  if (!choices.includes(picked)) {
+    error = played.has(picked) ? "You've already submitted this puzzle." : 'That puzzle is closed.';
+  } else {
+    const words = typed.split(/[\s,]+/).filter(Boolean);
+    const seenRows = seen ? seen.split(',') : null;
+
+    // Checks the guesses against one puzzle. Screenshot rows come with their
+    // colors, which also fix misread letters.
+    const attempt = async (n: number) => {
+      const puzzle = await getPuzzle(db, n);
+      if (!puzzle) return { ok: false as const, error: "Couldn't fetch that puzzle's answer from the NYT. Try again in a minute." };
+      const fixed = seenRows ? reconcile(words, seenRows, puzzle.answer) : { ok: true as const, guesses: words };
+      if (!fixed.ok) {
+        return {
+          ok: false as const,
+          error: `Your screenshot doesn't match Wordle #${label(n)}. If it's from another day, switch to that day's tab; if not, tap row ${fixed.row} and type it.`,
+        };
+      }
+      return checkGuesses(fixed.guesses, puzzle.answer);
+    };
+
+    let result = await attempt(picked);
+    // A screenshot's colors only fit one answer. If it doesn't fit the puzzle
+    // picked but fits the other open one, that's the puzzle it's from.
+    if (!result.ok && seenRows) {
+      for (const alt of choices.filter((n) => n !== picked)) {
+        const r = await attempt(alt);
+        if (r.ok) {
+          moved = picked;
+          picked = alt;
+          result = r;
+          break;
+        }
+      }
+    }
+
+    if (!result.ok) {
+      error = result.error;
+    } else {
+      // The login cookie outlives the users row (e.g. after a reset); restore it.
+      await upsertUser(db, user);
+      const saved = await addSubmission(db, {
+        user_id: user.discord_id,
+        puzzle_no: picked,
+        guesses: result.value.guesses.join(','),
+        colors: result.value.colors.map((c) => c.join('')).join(','),
+        score: result.value.score,
+        hard_mode: result.value.hard ? 1 : 0,
+        submitted_at: now,
+      });
+      if (saved) return Astro.redirect(`/?p=${picked}&saved=1${moved ? `&from=${moved}` : ''}`, 303);
+      error = "You've already submitted this puzzle.";
+    }
+  }
+}
+
+const players = await submissionsFor(db, [viewing]);
+const mine = user ? players.find((s) => s.user_id === user.discord_id) : undefined;
+// The other open puzzle, if you haven't done it yet.
+const other = open.find((n) => n !== viewing && !played.has(n));
+const saved = Astro.url.searchParams.has('saved');
+const savedFrom = Number(Astro.url.searchParams.get('from')) || null;
+
+
+const longDate = new Date(`${puzzleDate(viewing)}T00:00:00Z`).toLocaleDateString('en-US', {
+  weekday: 'long',
+  month: 'long',
+  day: 'numeric',
+  timeZone: 'UTC',
+});
+const myShare = mine ? shareMine(mine, Astro.url.origin) : '';
+
+// Leaderboards over longer stretches. They follow the UTC date, so friends in
+// different time zones always see the same week and month. Weeks start Monday.
+const todayDate = puzzleDate(localToday('UTC', now));
+const weekStart = puzzleNumber(todayDate) - ((new Date(`${todayDate}T00:00:00Z`).getUTCDay() + 6) % 7);
+const monthStart = puzzleNumber(`${todayDate.slice(0, 8)}01`);
+const [weekT, monthT, allT] = await Promise.all([tallies(db, weekStart), tallies(db, monthStart), tallies(db)]);
+const periods = [
+  { id: 'week', min: 3, ...rank(weekT, 3), empty: 'No games yet this week.' },
+  { id: 'month', min: 5, ...rank(monthT, 5), empty: 'No games yet this month.' },
+  { id: 'all', min: 7, ...rank(allT, 7), empty: 'No games yet.' },
+];
+const boards = [
+  { id: 'day', label: `#${label(viewing)}` },
+  { id: 'week', label: 'Week' },
+  { id: 'month', label: 'Month' },
+  { id: 'all', label: 'All time' },
+];
+const keys = ['qwertyuiop', 'asdfghjkl', 'zxcvbnm'];
+---
+
+<Base title="Wordler">
+  <div class="today-head">
+    <div>
+      <p class="eyebrow">{longDate}</p>
+      <h1 class="display display--page">Wordle {label(viewing)}</h1>
+      <p class="annotation tabular today-head__meta">Open for another {timeUntil(closesAt(viewing), now)}</p>
+    </div>
+    {
+      open.length > 1 && (
+        <nav class="tabs" aria-label="Which puzzle">
+          {open.map((n) => (
+            <a class:list={['tab', n === viewing && 'tab--on']} href={href(n)} aria-current={n === viewing ? 'page' : undefined}>
+              <span class="tab__name">
+                #{label(n)} {n === today && <span class="tab__today">today</span>}
+              </span>
+              <span class="tab__meta">
+                {shortDate(n)} · {played.has(n) ? 'done' : 'not played'}
+              </span>
+            </a>
+          ))}
+        </nav>
+      )
+    }
+  </div>
+
+  <div class="home">
+    <!-- Left: your guesses -->
+    <section class="panel" aria-labelledby="yours">
+      <div class="panel__head">
+        <h2 class="display display--section" id="yours">Your guesses</h2>
+      </div>
+
+      {
+        saved && (
+          <p class="notice" style="margin-bottom:1rem">
+            {savedFrom
+              ? `Saved as Wordle ${label(viewing)}: your screenshot matched this puzzle, not #${label(savedFrom)}.`
+              : `Saved Wordle ${label(viewing)}. Nice one.`}
+          </p>
+        )
+      }
+
+      {
+        !user ? (
+          <div class="signin">
+            <div class="grid grid--md" aria-hidden="true">
+              {Array.from({ length: 6 }, () => (
+                <div class="grid__row">
+                  {Array.from({ length: 5 }, () => (
+                    <span class="tile tile--empty" />
+                  ))}
+                </div>
+              ))}
+            </div>
+            <p>Played today's Wordle? Log in with Discord and type your guesses to get on the board.</p>
+            <a class="button button--discord" href="/auth/login?next=/">
+              Log in with Discord
+            </a>
+          </div>
+        ) : mine ? (
+          <div class="done">
+            <p class="eyebrow">Done with #{label(viewing)}</p>
+            <span class="done__score">{scoreLabel(mine.score)}</span>
+            <Grid colors={mine.colors} guesses={mine.guesses} size="md" />
+            <CopyButton text={myShare} small={false} />
+            <p class="annotation">Others see your colors on the leaderboard; your words only if they ask.</p>
+            {other && (
+              <a class="done__more" href={href(other)}>
+                Wordle {label(other)} is open too: add it →
+              </a>
+            )}
+          </div>
+        ) : (
+          <form class="submit" method="post" action={href(viewing)} id="submit-form">
+            <input type="hidden" name="puzzle" value={viewing} />
+
+            {error && (
+              <p class="notice notice--error" role="alert">
+                {error}
+              </p>
+            )}
+
+            <input type="hidden" name="seen" id="seen" value={seen} />
+            <label class="typed-fallback-wrap" id="fallback-wrap">
+              <span class="annotation">Guesses, separated by spaces</span>
+              <input
+                class="typed-fallback"
+                name="guesses"
+                id="guesses"
+                value={typed}
+                autocomplete="off"
+                autocapitalize="off"
+                spellcheck="false"
+                placeholder="crane stomp ..."
+                required
+              />
+            </label>
+
+            <!-- The empty board doubles as the drop zone: tap it, drop on it, or paste. -->
+            <div class="drop" id="drop" hidden>
+              <div class="grid grid--lg" id="board" aria-label="Your guesses">
+                {Array.from({ length: 6 }, (_, r) => (
+                  <div class="grid__row" data-row={r}>
+                    {Array.from({ length: 5 }, () => (
+                      <span class="tile tile--empty" />
+                    ))}
+                  </div>
+                ))}
+              </div>
+              <div class="drop__cta" id="drop-cta">
+                <input type="file" id="shot" accept="image/*" class="visually-hidden" />
+                <label for="shot" class="button drop__button">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="3" y="5" width="18" height="15" rx="2"></rect>
+                    <circle cx="12" cy="12.5" r="3.5"></circle>
+                    <path d="M8 5l1.5-2h5L16 5"></path>
+                  </svg>
+                  Upload screenshot
+                </label>
+                <p class="drop__hint">or drop it here · paste with <kbd>Ctrl</kbd>+<kbd>V</kbd></p>
+              </div>
+            </div>
+
+            <p class="status" id="status" role="status" hidden></p>
+
+            <div class="keyboard" id="keyboard" hidden>
+              {keys.map((row, i) => (
+                <div class="keyboard__row">
+                  {i === 2 && (
+                    <button type="button" class="key key--wide" data-key="Enter">
+                      Enter
+                    </button>
+                  )}
+                  {[...row].map((k) => (
+                    <button type="button" class="key" data-key={k}>
+                      {k}
+                    </button>
+                  ))}
+                  {i === 2 && (
+                    <button type="button" class="key key--wide" data-key="Backspace" aria-label="Delete">
+                      ⌫
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <button class="button" type="submit" id="save">Save result</button>
+            <div class="submit__alt" id="alt" hidden>
+              <button type="button" class="link-button" id="type-instead">Type my guesses instead</button>
+              <button type="button" class="link-button" id="start-over" hidden>Use a different screenshot</button>
+            </div>
+          </form>
+        )
+      }
+    </section>
+
+    <!-- Right: the leaderboard -->
+    <section class="panel" aria-labelledby="board-title">
+      <div class="panel__head">
+        <h2 class="display display--section" id="board-title">Leaderboard</h2>
+      </div>
+      <div class="board-tabs" role="tablist" aria-labelledby="board-title">
+        {
+          boards.map((b, i) => (
+            <button
+              type="button"
+              role="tab"
+              class="board-tab"
+              id={`tab-${b.id}`}
+              aria-controls={`board-${b.id}`}
+              aria-selected={i === 0 ? 'true' : 'false'}
+              tabindex={i === 0 ? 0 : -1}
+              data-board={b.id}
+            >
+              {b.label}
+            </button>
+          ))
+        }
+      </div>
+
+      <div class="lb-panel" id="board-day" role="tabpanel" aria-labelledby="tab-day">
+        {
+          players.length ? (
+            <>
+              <p class="annotation lb__hint">
+                <span class="on-touch">tap</span>
+                <span class="on-hover">hover over</span> a player to see their guesses
+              </p>
+              <Leaderboard players={players} me={user?.discord_id} />
+            </>
+          ) : (
+            <p class="empty">Nobody's played yet. Be first.</p>
+          )
+        }
+      </div>
+      {
+        periods.map((b) => (
+          <div class="lb-panel" id={`board-${b.id}`} role="tabpanel" aria-labelledby={`tab-${b.id}`} hidden>
+            <Standings ranked={b.ranked} pending={b.pending} min={b.min} me={user?.discord_id} empty={b.empty} />
+          </div>
+        ))
+      }
+      <details class="how" id="how" hidden>
+        <summary class="annotation">How the ranking works</summary>
+        <p>
+          Week, month and all time rank by <strong>rating</strong>: your average guesses (a miss counts as 7), adjusted for
+          how many games you've played. Everyone starts with {PRIOR} games' worth of the group average and moves toward
+          their own average as they play. To be ranked you need 3 games in the week, 5 in the month or 7 overall. Lower is
+          better. Weeks (Monday to Sunday) and months follow the UTC date, so everyone sees the same boards.
+        </p>
+      </details>
+    </section>
+  </div>
+</Base>
+
+<script>
+  import { readScreenshot, warmOcr } from '../scripts/ocr';
+
+  // Leaderboard tabs: the puzzle / Week / Month / All time. The choice is remembered
+  // on this device.
+  {
+    const tabs = [...document.querySelectorAll<HTMLButtonElement>('[data-board]')];
+    const show = (id: string, focus = false) => {
+      for (const tab of tabs) {
+        const on = tab.dataset.board === id;
+        tab.setAttribute('aria-selected', String(on));
+        tab.tabIndex = on ? 0 : -1;
+        document.getElementById(`board-${tab.dataset.board}`)!.hidden = !on;
+        if (on && focus) tab.focus();
+      }
+      // The rating explainer is for the longer boards only.
+      document.getElementById('how')!.hidden = id === 'day';
+      try {
+        localStorage.setItem('board', id);
+      } catch {}
+    };
+    tabs.forEach((tab, i) => {
+      tab.addEventListener('click', () => show(tab.dataset.board!));
+      tab.addEventListener('keydown', (e) => {
+        const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+        if (step) show(tabs[(i + step + tabs.length) % tabs.length].dataset.board!, true);
+      });
+    });
+    try {
+      const saved = localStorage.getItem('board');
+      if (saved && tabs.some((t) => t.dataset.board === saved)) show(saved);
+    } catch {}
+  }
+
+  // The board. Screenshot first; typing (or fixing a misread row) second.
+  // Without JS the plain text box above still works.
+  const form = document.getElementById('submit-form') as HTMLFormElement | null;
+  if (form) {
+    const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+    const input = $<HTMLInputElement>('guesses');
+    const seenInput = $<HTMLInputElement>('seen');
+    const drop = $('drop');
+    const cta = $('drop-cta');
+    const board = $('board');
+    const keyboard = $('keyboard');
+    const status = $('status');
+    const save = $<HTMLButtonElement>('save');
+    const fileInput = $<HTMLInputElement>('shot');
+    const typeInstead = $<HTMLButtonElement>('type-instead');
+    const startOver = $<HTMLButtonElement>('start-over');
+
+    drop.hidden = false;
+    $('alt').hidden = false;
+    $('fallback-wrap').hidden = true;
+    input.required = false;
+
+    // Each row: its letters, and its colors if it came from a screenshot.
+    type Row = { word: string; colors: string | null };
+    let rows: Row[] = [];
+    let editing = -1; // the row the keyboard types into
+    let reading = false;
+
+    // Coming back from a failed save: put the attempt back on the board.
+    const prevColors = seenInput.value ? seenInput.value.split(',') : [];
+    input.value
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((w) => /^[a-z?]{5}$/.test(w))
+      .slice(0, 6)
+      .forEach((word, i) => rows.push({ word, colors: prevColors[i] || null }));
+
+    const say = (text: string, tone: 'info' | 'error' = 'info') => {
+      status.hidden = !text;
+      status.textContent = text;
+      status.classList.toggle('status--error', tone === 'error');
+    };
+
+    const render = () => {
+      const typing = editing >= 0;
+      cta.hidden = rows.length > 0 || typing || reading;
+      keyboard.hidden = !typing;
+      save.hidden = reading || (rows.length === 0 && !typing);
+      startOver.hidden = reading || !rows.some((r) => r.colors);
+      board.classList.toggle('grid--reading', reading);
+      typeInstead.hidden = typing || rows.length > 0;
+      board.classList.toggle('grid--pickable', rows.some((r) => r.colors) && !reading);
+
+      board.querySelectorAll<HTMLElement>('.grid__row').forEach((rowEl, r) => {
+        const row = rows[r];
+        const live = r === editing;
+        rowEl.classList.toggle('grid__row--edit', live);
+        rowEl.querySelectorAll('.tile').forEach((tile, i) => {
+          const letter = row?.word[i] ?? '';
+          const shown = letter === '?' ? '' : letter;
+          if (tile.textContent !== shown) tile.textContent = shown;
+          const colored = row?.colors && !live;
+          tile.className = colored
+            ? `tile tile--${row.colors![i]}${letter === '?' ? ' tile--unread' : ''}`
+            : `tile ${letter ? 'tile--typed' : 'tile--empty'}`;
+        });
+      });
+
+      const full = rows.filter((r) => r.word.length === 5);
+      input.value = full.map((r) => r.word).join(' ');
+      seenInput.value = full.some((r) => r.colors) ? full.map((r) => r.colors ?? '').join(',') : '';
+    };
+
+    // ---- Screenshots ----------------------------------------------------
+    const handleImage = async (file: File | null | undefined) => {
+      if (!file || !file.type.startsWith('image/') || reading) return;
+      reading = true;
+      editing = -1;
+      rows = [];
+      say('Reading your screenshot…');
+      render();
+      try {
+        const result = await readScreenshot(file, (found) => {
+          rows = found.map((r) => ({ word: r.word, colors: r.colors }));
+          render();
+        });
+        if (!result) {
+          rows = [];
+          say("Couldn't find a Wordle board in that picture. Try a screenshot of your finished game.", 'error');
+        } else {
+          const unsure = rows.some((r) => r.word.includes('?'));
+          say(
+            unsure
+              ? 'Got it. A few letters were hard to read; saving fills them in from the colors. Tap a row to type it yourself.'
+              : 'Got it. Check the letters, then save. Tap a row to fix it.',
+          );
+        }
+      } catch {
+        rows = [];
+        say("Couldn't read that image. Try another screenshot, or type your guesses.", 'error');
+      } finally {
+        reading = false;
+        render();
+      }
+    };
+
+    fileInput.addEventListener('change', () => {
+      handleImage(fileInput.files?.[0]);
+      fileInput.value = '';
+    });
+    // Start fetching the reader as soon as someone reaches for the button.
+    for (const ev of ['pointerenter', 'touchstart', 'focusin']) {
+      cta.addEventListener(ev, () => warmOcr().catch(() => {}), { once: true });
+    }
+
+    // Paste anywhere on the page.
+    document.addEventListener('paste', (e) => {
+      const item = [...(e.clipboardData?.items ?? [])].find((i) => i.type.startsWith('image/'));
+      if (item) {
+        e.preventDefault();
+        handleImage(item.getAsFile());
+      }
+    });
+
+    // Drop anywhere on the page; the board lights up while dragging.
+    let depth = 0;
+    document.addEventListener('dragenter', (e) => {
+      if (!e.dataTransfer?.types.includes('Files')) return;
+      depth++;
+      drop.classList.add('drop--over');
+    });
+    document.addEventListener('dragleave', () => {
+      if (--depth <= 0) drop.classList.remove('drop--over');
+    });
+    document.addEventListener('dragover', (e) => e.preventDefault());
+    document.addEventListener('drop', (e) => {
+      e.preventDefault();
+      depth = 0;
+      drop.classList.remove('drop--over');
+      handleImage(e.dataTransfer?.files[0]);
+    });
+
+    startOver.addEventListener('click', () => {
+      rows = [];
+      editing = -1;
+      say('');
+      render();
+      fileInput.click();
+    });
+
+    // ---- Typing ---------------------------------------------------------
+    typeInstead.addEventListener('click', () => {
+      rows = [{ word: '', colors: null }];
+      editing = 0;
+      say('Type each guess and press Enter for the next row.');
+      render();
+    });
+
+    // Tap a screenshot row to retype it; its colors stay as the screenshot had them.
+    // Tapping the empty board opens the picker.
+    board.addEventListener('click', (e) => {
+      if (reading) return;
+      const rowEl = (e.target as HTMLElement).closest<HTMLElement>('[data-row]');
+      const r = Number(rowEl?.dataset.row);
+      if (!rows.length && editing < 0) {
+        fileInput.click();
+        return;
+      }
+      if (!rowEl || !rows[r]?.colors) return;
+      editing = r;
+      rows[r].word = '';
+      say(`Type row ${r + 1}, then press Enter.`);
+      render();
+    });
+
+    const press = (key: string) => {
+      if (editing < 0) return false;
+      const row = rows[editing];
+      if (key === 'Enter') {
+        if (row.word.length !== 5) return true;
+        if (!row.colors && editing === rows.length - 1 && rows.length < 6) {
+          rows.push({ word: '', colors: null });
+          editing++;
+        } else {
+          editing = -1;
+          say('Check the letters, then save.');
+        }
+      } else if (key === 'Backspace') {
+        if (row.word) row.word = row.word.slice(0, -1);
+        else if (!row.colors && editing > 0 && editing === rows.length - 1) {
+          rows.pop();
+          editing--;
+        }
+      } else if (/^[a-z]$/i.test(key)) {
+        if (row.word.length < 5) row.word += key.toLowerCase();
+      } else {
+        return false;
+      }
+      render();
+      return true;
+    };
+
+    document.addEventListener('keydown', (e) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const inControl = (e.target as HTMLElement).closest('input, textarea, select, button');
+      if (inControl && e.key !== 'Backspace' && !/^[a-z]$/i.test(e.key)) return;
+      if (press(e.key)) e.preventDefault();
+    });
+
+    keyboard.addEventListener('click', (e) => {
+      const key = (e.target as HTMLElement).closest<HTMLElement>('[data-key]')?.dataset.key;
+      if (key) press(key);
+    });
+
+    form.addEventListener('submit', (e) => {
+      if (editing >= 0 && rows[editing].word.length === 5) press('Enter');
+      if (!input.value) {
+        e.preventDefault();
+        board.animate([{ transform: 'translateX(-6px)' }, { transform: 'translateX(6px)' }, { transform: 'none' }], 200);
+      } else {
+        save.disabled = true;
+        save.textContent = 'Saving…';
+      }
+    });
+
+    // A typed attempt came back with an error: keep typing where it left off.
+    if (rows.length && !rows.some((r) => r.colors) && rows.length < 6) {
+      rows.push({ word: '', colors: null });
+      editing = rows.length - 1;
+    }
+    render();
+  }
+</script>

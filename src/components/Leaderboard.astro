@@ -1,0 +1,157 @@
+---
+// A puzzle's players ranked by number of guesses (ties share a place). Rows
+// show colors only; tapping a player asks "Show guesses?" first, so nobody
+// sees words by accident. With `askFirst` off (closed puzzles) the guesses
+// are simply shown.
+import Grid from './Grid.astro';
+import { avatarUrl, type Submission } from '../lib/db';
+import { scoreLabel } from '../lib/wordle';
+
+interface Props {
+  players: Submission[]; // best first, as submissionsFor returns them
+  me?: string;
+  askFirst?: boolean;
+}
+
+const { players, me, askFirst = true } = Astro.props;
+const place = (s: Submission) => players.findIndex((p) => p.score === s.score) + 1;
+---
+
+<ol class="lb">
+  {
+    players.map((s) => {
+      const tip = `tip-${s.puzzle_no}-${s.user_id}`;
+      const hard = s.hard_mode ? (
+        <span class="hard" title="Played in hard mode">
+          Hard
+        </span>
+      ) : null;
+      const avatar = (
+        <img
+          class="avatar"
+          src={avatarUrl({ discord_id: s.user_id, avatar: s.avatar })}
+          alt=""
+          width="30"
+          height="30"
+          loading="lazy"
+        />
+      );
+      return (
+        <li class:list={['lb__row', s.user_id === me && 'lb__row--me', !askFirst && 'lb__row--open']}>
+          <span class:list={['lb__rank', place(s) === 1 && 'lb__rank--first']}>{place(s)}</span>
+          {askFirst ? (
+            <button type="button" class="lb__who" aria-expanded="false" aria-controls={tip} data-tip={tip}>
+              {avatar}
+              <span class="lb__name">{s.name}</span>
+              {hard}
+            </button>
+          ) : (
+            <a class="lb__who" href={`/u/${s.user_id}`}>
+              {avatar}
+              <span class="lb__name">{s.name}</span>
+              {hard}
+            </a>
+          )}
+          <span class="lb__score">{scoreLabel(s.score)}</span>
+          <Grid colors={s.colors} />
+
+          {askFirst && (
+            <div class="tip" id={tip} role="dialog" aria-label={`Show ${s.name}'s guesses?`} hidden>
+              <p class="tip__q">Show {s.name}'s guesses?</p>
+              <div class="tip__actions">
+                <button type="button" class="button button--small" data-reveal>
+                  Show
+                </button>
+                <a class="button button--ghost button--small" href={`/u/${s.user_id}`}>
+                  Profile
+                </a>
+              </div>
+            </div>
+          )}
+
+          <div class="lb__guesses" hidden={askFirst}>
+            <Grid colors={s.colors} guesses={s.guesses} size="md" />
+          </div>
+        </li>
+      );
+    })
+  }
+</ol>
+
+<script>
+  // One set of listeners for every leaderboard on the page.
+  const closeTips = (except?: HTMLElement) =>
+    document.querySelectorAll<HTMLElement>('.tip:not([hidden])').forEach((tip) => {
+      if (tip === except) return;
+      tip.hidden = true;
+      document.querySelector(`[data-tip="${tip.id}"]`)?.setAttribute('aria-expanded', 'false');
+    });
+
+  const openTip = (who: HTMLElement, focus: boolean) => {
+    const tip = document.getElementById(who.dataset.tip!)!;
+    closeTips(tip);
+    tip.hidden = false;
+    who.setAttribute('aria-expanded', 'true');
+    if (focus) tip.querySelector<HTMLElement>('[data-reveal]')?.focus();
+  };
+
+  const rowOf = (el: Element) => el.closest<HTMLElement>('.lb__row')!;
+  const isOpen = (row: HTMLElement) => row.classList.contains('lb__row--open');
+
+  document.addEventListener('click', (e) => {
+    const el = e.target as HTMLElement;
+    const who = el.closest<HTMLElement>('[data-tip]');
+    if (who) {
+      const row = rowOf(who);
+      // Already showing: tapping the name again hides the guesses.
+      if (isOpen(row)) {
+        row.classList.remove('lb__row--open');
+        row.querySelector<HTMLElement>('.lb__guesses')!.hidden = true;
+        return;
+      }
+      openTip(who, true);
+      return;
+    }
+    const reveal = el.closest('[data-reveal]');
+    if (reveal) {
+      const row = rowOf(reveal);
+      row.classList.add('lb__row--open');
+      row.querySelector<HTMLElement>('.lb__guesses')!.hidden = false;
+      closeTips();
+      return;
+    }
+    if (!el.closest('.tip')) closeTips();
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeTips();
+  });
+
+  // With a mouse, resting on a player asks the question; leaving the row
+  // (the card hangs inside it) puts it away again. Touch keeps tap-to-ask.
+  let openTimer: ReturnType<typeof setTimeout> | undefined;
+  let closeTimer: ReturnType<typeof setTimeout> | undefined;
+
+  document.addEventListener('pointerover', (e) => {
+    if (e.pointerType !== 'mouse') return;
+    const el = e.target as HTMLElement;
+    if (el.closest('.lb__row')) clearTimeout(closeTimer);
+    const who = el.closest<HTMLElement>('[data-tip]');
+    if (!who || isOpen(rowOf(who))) return;
+    clearTimeout(openTimer);
+    openTimer = setTimeout(() => openTip(who, false), 120);
+  });
+
+  document.addEventListener('pointerout', (e) => {
+    if (e.pointerType !== 'mouse') return;
+    const row = (e.target as HTMLElement).closest<HTMLElement>('.lb__row');
+    const to = e.relatedTarget as Node | null;
+    if (!row || (to && row.contains(to))) return;
+    clearTimeout(openTimer);
+    const tip = row.querySelector<HTMLElement>('.tip');
+    if (tip && !tip.hidden && !tip.contains(document.activeElement)) {
+      clearTimeout(closeTimer);
+      closeTimer = setTimeout(() => closeTips(), 300);
+    }
+  });
+</script>
