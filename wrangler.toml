@@ -1,6 +1,9 @@
 # Cloudflare Pages project: the site, its server routes and the D1 binding.
 name = "wordler"
-compatibility_date = "2026-01-15"
+# Keep this before 2025-09-15. From then on, nodejs_compat gives Workers a
+# Node-like `process`, Astro 5 then thinks it's running on Node and streams a
+# body Workers can't send: every page comes out as "[object Object]".
+compatibility_date = "2025-08-15"
 compatibility_flags = ["nodejs_compat"]
 pages_build_output_dir = "./dist"
 
