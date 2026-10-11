@@ -194,8 +194,7 @@ const since = subs.length ? shortDate(subs[subs.length - 1].puzzle_no) : null;
             <>
               <Grid colors={bestGame.colors} guesses={bestRevealed ? bestGame.guesses : undefined} size="md" />
               <p class="fact__note">
-                <a href={`/puzzle/${bestGame.puzzle_no}`}>Wordle {label(bestGame.puzzle_no)}</a>
-                {`, ${shortDate(bestGame.puzzle_no)}${bestGame.hard_mode ? ', in hard mode' : ''}.`}
+                <a href={`/puzzle/${bestGame.puzzle_no}`}>Wordle {label(bestGame.puzzle_no)}</a>{`, ${shortDate(bestGame.puzzle_no)}${bestGame.hard_mode ? ', in hard mode' : ''}.`}
               </p>
             </>
           ) : (
